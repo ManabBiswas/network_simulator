@@ -100,40 +100,52 @@ class GoBackNProtocol:
             
             # Simulate ACK reception
             ack_received = False
+            highest_ack = -1
+            
             for seq_num in range(self.next_ack_expected, self.next_seq_num):
-                if not self.sent_packets[seq_num]['lost'] and not self.sent_packets[seq_num]['corrupted']:
-                    ack_lost = random.random() < (self.loss_rate * 0.3)
+                # RULE 1: STRICT IN-ORDER DELIVERY
+                # If a packet is lost/corrupted, the receiver drops it and ignores 
+                # all subsequent packets in the window. No ACKs are generated.
+                if self.sent_packets[seq_num]['lost'] or self.sent_packets[seq_num]['corrupted']:
+                    break
                     
-                    if not ack_lost:
+                # If packet survived, receiver sends an ACK. Now check if ACK survives.
+                ack_lost = random.random() < (self.loss_rate * 0.3)
+                
+                if not ack_lost:
+                    self.events.append({
+                        'time': self.current_time,
+                        'event_type': 'ack',
+                        'packet_num': seq_num,
+                        'description': f'✅ ACK {seq_num} received (Cumulative)'
+                    })
+                    self.acks_received += 1
+                    highest_ack = seq_num
+                    ack_received = True
+                    
+                    # Simulate duplicate ACK
+                    if self.simulate_duplicate_ack and random.random() < 0.15:
+                        self.current_time += 50
                         self.events.append({
                             'time': self.current_time,
                             'event_type': 'ack',
                             'packet_num': seq_num,
-                            'description': f'✅ ACK {seq_num} received (Cumulative)'
+                            'description': f'📢 Duplicate ACK {seq_num} received'
                         })
-                        self.acks_received += 1
-                        
-                        # Simulate duplicate ACK
-                        if self.simulate_duplicate_ack and random.random() < 0.15:
-                            self.current_time += 50
-                            self.events.append({
-                                'time': self.current_time,
-                                'event_type': 'ack',
-                                'packet_num': seq_num,
-                                'description': f'📢 Duplicate ACK {seq_num} received'
-                            })
-                            self.duplicate_acks += 1
-                        
-                        self.next_ack_expected = seq_num + 1
-                        ack_received = True
-                    else:
-                        self.events.append({
-                            'time': self.current_time,
-                            'event_type': 'loss',
-                            'packet_num': seq_num,
-                            'description': f'❌ ACK {seq_num} lost in transmission'
-                        })
-                    break
+                        self.duplicate_acks += 1
+                else:
+                    self.events.append({
+                        'time': self.current_time,
+                        'event_type': 'loss',
+                        'packet_num': seq_num,
+                        'description': f'❌ ACK {seq_num} lost in transmission'
+                    })
+                    # DO NOT break here. Even if this ACK is lost, the next packet 
+                    # in the window might trigger an ACK that cumulatively covers this one.
+            
+            # Apply cumulative ACK state update
+            if highest_ack != -1:
+                self.next_ack_expected = highest_ack + 1
             
             # If no ACK received and we've been waiting, trigger timeout
             if not ack_received and self.next_seq_num > self.next_ack_expected:

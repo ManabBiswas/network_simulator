@@ -63,8 +63,8 @@ function App() {
     efficiency: 0
   })
   
-  // Refs to control the playback engine and prevent memory leaks
-  const activeTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  // FIX 1: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout for browser compatibility
+  const activeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isPausedRef = useRef(false)
   
   const [parameters, setParameters] = useState<Parameters>({
@@ -80,52 +80,8 @@ function App() {
     simulateDuplicateACK: false
   })
 
-  const handleStartSimulation = useCallback(async () => {
-    // Clear any existing timeouts before starting a new run
-    if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current)
-    
-    setIsRunning(true)
-    setIsPaused(false)
-    isPausedRef.current = false
-    setEvents([])
-    setPackets([])
-
-    const params = {
-      protocol,
-      total_packets: parameters.totalPackets,
-      transmission_delay: parameters.transmissionDelay,
-      ack_delay: parameters.ackDelay,
-      loss_rate: parameters.lossRate,
-      timeout_duration: parameters.timeoutDuration,
-      window_size: protocol === 'go-back-n' ? parameters.windowSize : 1,
-      message: message,
-      simulate_edge_cases: parameters.showEdgeCases,
-      simulate_corruption: parameters.simulatePacketCorruption,
-      simulate_late_ack: parameters.simulateLateACK,
-      simulate_duplicate_ack: parameters.simulateDuplicateACK
-    }
-
-    try {
-      const response = await fetch('http://localhost:5000/api/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params)
-      })
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`)
-      }
-
-      const data: SimulationData = await response.json()
-      playSimulation(data)
-    } catch (error) {
-      console.error('Error fetching simulation:', error)
-      alert('Could not connect to backend. Make sure the server is running on port 5000.')
-      setIsRunning(false)
-    }
-  }, [protocol, parameters, message])
-
-  const playSimulation = (data: SimulationData) => {
+  // FIX 2: Move playSimulation ABOVE handleStartSimulation so it is declared before use
+  const playSimulation = useCallback((data: SimulationData) => {
     const fetchedEvents = data.events
     let eventIndex = 0
 
@@ -173,7 +129,52 @@ function App() {
 
     // Kick off the playback loop
     playNextEvent()
-  }
+  }, [])
+
+  const handleStartSimulation = useCallback(async () => {
+    // Clear any existing timeouts before starting a new run
+    if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current)
+    
+    setIsRunning(true)
+    setIsPaused(false)
+    isPausedRef.current = false
+    setEvents([])
+    setPackets([])
+
+    const params = {
+      protocol,
+      total_packets: parameters.totalPackets,
+      transmission_delay: parameters.transmissionDelay,
+      ack_delay: parameters.ackDelay,
+      loss_rate: parameters.lossRate,
+      timeout_duration: parameters.timeoutDuration,
+      window_size: protocol === 'go-back-n' ? parameters.windowSize : 1,
+      message: message,
+      simulate_edge_cases: parameters.showEdgeCases,
+      simulate_corruption: parameters.simulatePacketCorruption,
+      simulate_late_ack: parameters.simulateLateACK,
+      simulate_duplicate_ack: parameters.simulateDuplicateACK
+    }
+
+    try {
+      const response = await fetch('http://localhost:5000/api/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`)
+      }
+
+      const data: SimulationData = await response.json()
+      playSimulation(data)
+    } catch (error) {
+      console.error('Error fetching simulation:', error)
+      alert('Could not connect to backend. Make sure the server is running on port 5000.')
+      setIsRunning(false)
+    }
+  }, [protocol, parameters, message, playSimulation])
 
   const handlePauseResume = () => {
     const nextPauseState = !isPaused
