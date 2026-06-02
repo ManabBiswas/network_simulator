@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { motion } from 'framer-motion'
 import ProtocolSelector from './components/ProtocolSelector'
 import SimulationControls from './components/SimulationControls'
@@ -62,6 +62,11 @@ function App() {
     totalTime: 0,
     efficiency: 0
   })
+  
+  // Refs to control the playback engine and prevent memory leaks
+  const activeTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isPausedRef = useRef(false)
+  
   const [parameters, setParameters] = useState<Parameters>({
     totalPackets: 5,
     transmissionDelay: 500,
@@ -76,8 +81,12 @@ function App() {
   })
 
   const handleStartSimulation = useCallback(async () => {
+    // Clear any existing timeouts before starting a new run
+    if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current)
+    
     setIsRunning(true)
     setIsPaused(false)
+    isPausedRef.current = false
     setEvents([])
     setPackets([])
 
@@ -117,12 +126,12 @@ function App() {
   }, [protocol, parameters, message])
 
   const playSimulation = (data: SimulationData) => {
-    const events = data.events
+    const fetchedEvents = data.events
     let eventIndex = 0
-    let pauseCheckInterval: NodeJS.Timeout | null = null
 
     const playNextEvent = async () => {
-      if (eventIndex >= events.length) {
+      // Check if we hit the end of the simulation
+      if (eventIndex >= fetchedEvents.length) {
         setIsRunning(false)
         if (data.statistics) {
           setStatistics({
@@ -133,41 +142,52 @@ function App() {
             efficiency: ((data.statistics.total_packets / data.statistics.total_packets_sent) * 100).toFixed(2)
           })
         }
-        if (pauseCheckInterval) clearInterval(pauseCheckInterval)
         return
       }
 
-      if (isPaused) {
-        pauseCheckInterval = setTimeout(playNextEvent, 100)
+      // If paused, just re-poll in 100ms without incrementing the index
+      if (isPausedRef.current) {
+        activeTimeoutRef.current = setTimeout(playNextEvent, 100)
         return
       }
 
-      const event = events[eventIndex]
+      const currentEvent = fetchedEvents[eventIndex]
 
-      setEvents(prev => [...prev, event])
-      setPackets(prev => [...prev, event])
+      setEvents(prev => [...prev, currentEvent])
+      setPackets(prev => [...prev, currentEvent])
 
-      if (eventIndex < events.length - 1) {
-        const nextTime = events[eventIndex + 1].time || 0
-        const currentTime = event.time || 0
-        const delay = Math.min(nextTime - currentTime, 300)
-        await new Promise(resolve => setTimeout(resolve, Math.max(delay, 50)))
+      // Calculate delay until the next event
+      let delay = 50
+      if (eventIndex < fetchedEvents.length - 1) {
+        const nextTime = fetchedEvents[eventIndex + 1].time || 0
+        const currentTime = currentEvent.time || 0
+        // Cap the delay visually so the user isn't staring at nothing during a long timeout
+        delay = Math.max(Math.min(nextTime - currentTime, 400), 50)
       }
 
       eventIndex++
-      playNextEvent()
+      
+      // Schedule the next event
+      activeTimeoutRef.current = setTimeout(playNextEvent, delay)
     }
 
+    // Kick off the playback loop
     playNextEvent()
   }
 
   const handlePauseResume = () => {
-    setIsPaused(!isPaused)
+    const nextPauseState = !isPaused
+    setIsPaused(nextPauseState)
+    isPausedRef.current = nextPauseState // Sync ref for the timeout closure to read
   }
 
   const handleReset = () => {
+    // Kill the engine
+    if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current)
+    
     setIsRunning(false)
     setIsPaused(false)
+    isPausedRef.current = false
     setPackets([])
     setEvents([])
     setStatistics({

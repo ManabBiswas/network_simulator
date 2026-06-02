@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { motion } from 'framer-motion'
 import './NetworkVisualization.css'
 
@@ -31,37 +31,53 @@ const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({
   events 
 }) => {
   const [animatingPackets, setAnimatingPackets] = useState<AnimatingPacket[]>([])
+  // We use this ref to track which packets we've already animated so we don't skip any if React batches updates
+  const lastProcessedIndex = useRef<number>(-1)
 
   useEffect(() => {
-    if (packets.length > 0) {
-      const lastPacket = packets[packets.length - 1]
-      if (lastPacket.event_type === 'send' || lastPacket.event_type === 'retransmit') {
-        const newAnimatingPacket: AnimatingPacket = {
-          id: `${lastPacket.packet_num}-${lastPacket.event_type}-${Date.now()}`,
-          packetNum: lastPacket.packet_num || 0,
-          direction: 'right',
-          type: lastPacket.event_type === 'retransmit' ? 'retransmit' : 'send',
-          startTime: Date.now()
+    // If the simulation is reset, reset our index tracker
+    if (packets.length === 0) {
+      lastProcessedIndex.current = -1
+      return
+    }
+
+    // Extract only the new packets that haven't been animated yet
+    const newPackets = packets.slice(lastProcessedIndex.current + 1)
+    
+    if (newPackets.length > 0) {
+      const newAnimations: AnimatingPacket[] = []
+
+      newPackets.forEach(packet => {
+        if (packet.event_type === 'send' || packet.event_type === 'retransmit') {
+          newAnimations.push({
+            id: `${packet.packet_num}-${packet.event_type}-${Date.now()}-${Math.random()}`,
+            packetNum: packet.packet_num || 0,
+            direction: 'right',
+            type: packet.event_type === 'retransmit' ? 'retransmit' : 'send',
+            startTime: Date.now()
+          })
+        } else if (packet.event_type === 'ack') {
+          newAnimations.push({
+            id: `ack-${packet.packet_num}-${Date.now()}-${Math.random()}`,
+            packetNum: packet.packet_num || 0,
+            direction: 'left',
+            type: 'ack',
+            startTime: Date.now()
+          })
         }
-        setAnimatingPackets(prev => [...prev, newAnimatingPacket])
+      })
+
+      if (newAnimations.length > 0) {
+        setAnimatingPackets(prev => [...prev, ...newAnimations])
         
+        // Clean them up after the animation finishes (0.8s animation + buffer)
         setTimeout(() => {
-          setAnimatingPackets(prev => prev.filter(p => p.id !== newAnimatingPacket.id))
-        }, 1000)
-      } else if (lastPacket.event_type === 'ack') {
-        const newAnimatingPacket: AnimatingPacket = {
-          id: `ack-${lastPacket.packet_num}-${Date.now()}`,
-          packetNum: lastPacket.packet_num || 0,
-          direction: 'left',
-          type: 'ack',
-          startTime: Date.now()
-        }
-        setAnimatingPackets(prev => [...prev, newAnimatingPacket])
-        
-        setTimeout(() => {
-          setAnimatingPackets(prev => prev.filter(p => p.id !== newAnimatingPacket.id))
+          setAnimatingPackets(prev => prev.filter(p => !newAnimations.some(na => na.id === p.id)))
         }, 1000)
       }
+
+      // Update the tracker so we don't process these again
+      lastProcessedIndex.current = packets.length - 1
     }
   }, [packets])
 
@@ -76,7 +92,6 @@ const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({
       </h2>
       <div className="visualization-container">
         <svg width="100%" height="400" viewBox="0 0 1000 400" preserveAspectRatio="xMidYMid meet">
-          {/* Defs for markers */}
           <defs>
             <marker id="arrowSend" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
               <polygon points="0 0, 10 3, 0 6" fill="#FF9800" />
@@ -89,28 +104,23 @@ const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({
             </marker>
           </defs>
 
-          {/* Timeline lines */}
           <line x1="80" y1="100" x2="80" y2="300" stroke="#ccc" strokeWidth="2" strokeDasharray="5,5" />
           <line x1="920" y1="100" x2="920" y2="300" stroke="#ccc" strokeWidth="2" strokeDasharray="5,5" />
 
-          {/* Sender box */}
           <rect x="30" y="150" width="100" height="100" fill="#4CAF50" rx="8" />
           <text x="80" y="205" textAnchor="middle" fill="white" fontSize="16" fontWeight="600">
             SENDER
           </text>
 
-          {/* Receiver box */}
           <rect x="870" y="150" width="100" height="100" fill="#2196F3" rx="8" />
           <text x="920" y="205" textAnchor="middle" fill="white" fontSize="16" fontWeight="600">
             RECEIVER
           </text>
 
-          {/* Protocol label */}
           <text x="500" y="30" textAnchor="middle" fill="#667eea" fontSize="18" fontWeight="600">
             {protocol === 'stop-and-wait' ? '⏸ Stop-and-Wait Protocol' : '🔄 Go-Back-N Protocol'}
           </text>
 
-          {/* Message display */}
           <rect x="250" y="320" width="500" height="60" fill="#f8f9fa" stroke="#e0e0e0" strokeWidth="2" rx="4" />
           <text x="500" y="338" textAnchor="middle" fill="#666" fontSize="12">
             Message: {message.substring(0, 50)}{message.length > 50 ? '...' : ''}
@@ -119,11 +129,9 @@ const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({
             {message.length} characters
           </text>
 
-          {/* Animating packets */}
           {animatingPackets.map(packet => (
             <motion.g key={packet.id}>
               {packet.direction === 'right' ? (
-                // Packet from sender to receiver
                 <>
                   <motion.line
                     x1="130"
@@ -160,7 +168,6 @@ const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({
                   </motion.text>
                 </>
               ) : (
-                // ACK from receiver to sender
                 <>
                   <motion.line
                     x1="870"
@@ -201,7 +208,6 @@ const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({
         </svg>
       </div>
 
-      {/* Event summary */}
       {events.length > 0 && (
         <motion.div
           style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f0f7ff', borderRadius: '8px', borderLeft: '4px solid #2196F3' }}
