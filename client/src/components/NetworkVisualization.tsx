@@ -68,7 +68,10 @@ const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({
       })
 
       if (newAnimations.length > 0) {
-        setAnimatingPackets(prev => [...prev, ...newAnimations])
+        // Break the synchronous render cascade by queueing the update for the next frame
+        requestAnimationFrame(() => {
+          setAnimatingPackets(prev => [...prev, ...newAnimations])
+        })
         
         // Clean them up after the animation finishes (0.8s animation + buffer)
         setTimeout(() => {
