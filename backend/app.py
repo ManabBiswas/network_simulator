@@ -1,142 +1,131 @@
-# Flask backend for Network Protocol Simulator
-
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import os
-import sys
+import os, sys
 
-# Add protocols to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'protocols'))
+sys.path.insert(0, os.path.dirname(__file__))
+from protocols import StopAndWaitProtocol, GoBackNProtocol
 
-from stop_and_wait import StopAndWaitProtocol
-from go_back_n import GoBackNProtocol
-
-app = Flask(__name__, static_folder='../frontend', static_url_path='')
+app = Flask(__name__, static_folder='../client/dist', static_url_path='')
 CORS(app)
 
-# Serve the main HTML file
+
+def _parse_params(data: dict) -> dict:
+    return {
+        'total_packets':      max(1,  min(50,  int(data.get('total_packets', 5)))),
+        'transmission_delay': max(100, min(5000, int(data.get('transmission_delay', 500)))),
+        'ack_delay':          max(50,  min(2000, int(data.get('ack_delay', 300)))),
+        'loss_rate':          max(0.0, min(0.9,  float(data.get('loss_rate', 0.0)))),
+        'timeout_duration':   max(200, min(8000, int(data.get('timeout_duration', 1500)))),
+        'window_size':        max(1,   min(20,   int(data.get('window_size', 4)))),
+        'message':            str(data.get('message', '')),
+        'simulate_edge_cases':    bool(data.get('simulate_edge_cases', True)),
+        'simulate_corruption':    bool(data.get('simulate_corruption', False)),
+        'simulate_late_ack':      bool(data.get('simulate_late_ack', False)),
+        'simulate_duplicate_ack': bool(data.get('simulate_duplicate_ack', False)),
+    }
+
+
+def _build_saw(p: dict) -> StopAndWaitProtocol:
+    return StopAndWaitProtocol(
+        total_packets=p['total_packets'],
+        transmission_delay=p['transmission_delay'],
+        ack_delay=p['ack_delay'],
+        loss_rate=p['loss_rate'],
+        timeout_duration=p['timeout_duration'],
+        message=p['message'],
+        simulate_edge_cases=p['simulate_edge_cases'],
+        simulate_corruption=p['simulate_corruption'],
+        simulate_late_ack=p['simulate_late_ack'],
+        simulate_duplicate_ack=p['simulate_duplicate_ack'],
+    )
+
+
+def _build_gbn(p: dict) -> GoBackNProtocol:
+    return GoBackNProtocol(
+        total_packets=p['total_packets'],
+        transmission_delay=p['transmission_delay'],
+        ack_delay=p['ack_delay'],
+        loss_rate=p['loss_rate'],
+        timeout_duration=p['timeout_duration'],
+        window_size=p['window_size'],
+        message=p['message'],
+        simulate_edge_cases=p['simulate_edge_cases'],
+        simulate_corruption=p['simulate_corruption'],
+        simulate_late_ack=p['simulate_late_ack'],
+        simulate_duplicate_ack=p['simulate_duplicate_ack'],
+    )
+
+
 @app.route('/')
 def index():
-    return app.send_static_file('index.html')
+    try:
+        return app.send_static_file('index.html')
+    except Exception:
+        return jsonify({'status': 'backend running — build frontend with npm run build'}), 200
+
+
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'ok', 'version': '2.1'})
+
+
+@app.route('/api/protocols')
+def protocols():
+    return jsonify({'protocols': [
+        {'id': 'stop-and-wait', 'name': 'Stop-and-Wait',
+         'description': 'Send one packet, wait for ACK before sending next'},
+        {'id': 'go-back-n',    'name': 'Go-Back-N',
+         'description': 'Sliding window — send N packets, cumulative ACKs'},
+    ]})
+
 
 @app.route('/api/simulate', methods=['POST'])
 def simulate():
-    """
-    Simulate a network protocol with given parameters
-    
-    Expected JSON parameters:
-    - protocol: 'stop-and-wait' or 'go-back-n'
-    - total_packets: number of packets to send
-    - transmission_delay: delay in milliseconds for packet transmission
-    - ack_delay: delay in milliseconds for ACK reception
-    - loss_rate: probability of packet loss (0.0 to 1.0)
-    - timeout_duration: timeout in milliseconds
-    - window_size: window size for go-back-n (default 1 for stop-and-wait)
-    - message: message to be transmitted
-    - simulate_edge_cases: whether to show edge cases
-    - simulate_corruption: simulate packet corruption
-    - simulate_late_ack: simulate delayed ACKs
-    - simulate_duplicate_ack: simulate duplicate ACKs
-    """
-    
     try:
-        data = request.json
-        
+        data = request.get_json(force=True) or {}
+        p = _parse_params(data)
         protocol = data.get('protocol', 'stop-and-wait')
-        total_packets = int(data.get('total_packets', 5))
-        transmission_delay = int(data.get('transmission_delay', 500))
-        ack_delay = int(data.get('ack_delay', 300))
-        loss_rate = float(data.get('loss_rate', 0.0))
-        timeout_duration = int(data.get('timeout_duration', 1500))
-        window_size = int(data.get('window_size', 1))
-        message = str(data.get('message', ''))
-        simulate_edge_cases = data.get('simulate_edge_cases', True)
-        simulate_corruption = data.get('simulate_corruption', False)
-        simulate_late_ack = data.get('simulate_late_ack', False)
-        simulate_duplicate_ack = data.get('simulate_duplicate_ack', False)
-        
-        # Validate parameters
-        if total_packets < 1 or total_packets > 50:
-            return jsonify({'error': 'Total packets must be between 1 and 50'}), 400
-        if transmission_delay < 100 or transmission_delay > 5000:
-            return jsonify({'error': 'Transmission delay must be between 100 and 5000 ms'}), 400
-        if not (0.0 <= loss_rate <= 1.0):
-            return jsonify({'error': 'Loss rate must be between 0.0 and 1.0'}), 400
-        
-        # Select and run protocol
+
         if protocol == 'stop-and-wait':
-            simulator = StopAndWaitProtocol(
-                total_packets=total_packets,
-                transmission_delay=transmission_delay,
-                ack_delay=ack_delay,
-                loss_rate=loss_rate,
-                timeout_duration=timeout_duration,
-                message=message,
-                simulate_edge_cases=simulate_edge_cases,
-                simulate_corruption=simulate_corruption,
-                simulate_late_ack=simulate_late_ack,
-                simulate_duplicate_ack=simulate_duplicate_ack
-            )
+            result = _build_saw(p).simulate()
         elif protocol == 'go-back-n':
-            if window_size < 1 or window_size > 20:
-                return jsonify({'error': 'Window size must be between 1 and 20'}), 400
-            simulator = GoBackNProtocol(
-                total_packets=total_packets,
-                transmission_delay=transmission_delay,
-                ack_delay=ack_delay,
-                loss_rate=loss_rate,
-                timeout_duration=timeout_duration,
-                window_size=window_size,
-                message=message,
-                simulate_edge_cases=simulate_edge_cases,
-                simulate_corruption=simulate_corruption,
-                simulate_late_ack=simulate_late_ack,
-                simulate_duplicate_ack=simulate_duplicate_ack
-            )
+            result = _build_gbn(p).simulate()
         else:
             return jsonify({'error': f'Unknown protocol: {protocol}'}), 400
-        
-        result = simulator.simulate()
+
         return jsonify(result), 200
-        
-    except ValueError as e:
-        return jsonify({'error': f'Invalid parameter: {str(e)}'}), 400
+
     except Exception as e:
-        print(f'Error in simulate: {str(e)}')
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        print(f'[simulate] error: {e}')
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/api/protocols', methods=['GET'])
-def get_protocols():
-    """Get list of available protocols"""
-    return jsonify({
-        'protocols': [
-            {
-                'name': 'Stop-and-Wait',
-                'id': 'stop-and-wait',
-                'description': 'Simple flow control: send one packet, wait for ACK'
-            },
-            {
-                'name': 'Go-Back-N',
-                'id': 'go-back-n',
-                'description': 'Sliding window protocol: send multiple packets, wait for cumulative ACK'
-            }
-        ]
-    }), 200
 
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({'status': 'ok'}), 200
+@app.route('/api/compare', methods=['POST'])
+def compare():
+    """Run SAW and GBN with identical params, return both results."""
+    try:
+        data = request.get_json(force=True) or {}
+        p = _parse_params(data)
 
-if __name__ == '__main__':
+        saw_result = _build_saw(p).simulate()
+        gbn_result = _build_gbn(p).simulate()
+
+        return jsonify({
+            'stop_and_wait': saw_result,
+            'go_back_n':     gbn_result,
+            'params':        p,
+        }), 200
+
+    except Exception as e:
+        print(f'[compare] error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+if __name__ == '__main__': 
     print("Network Protocol Simulator Backend")
     print("==================================")
     print("Starting Flask server on http://localhost:5000")
-    print("Frontend available at http://localhost:5000/")
-    print("\nAPI Endpoints:")
-    print("  POST /api/simulate - Run simulation")
-    print("  GET  /api/protocols - List available protocols")
-    print("  GET  /api/health - Health check")
+    print('Endpoints: /api/simulate  /api/compare  /api/health')
     print("\nPress Ctrl+C to stop the server")
     
     app.run(debug=True, port=5000, host='0.0.0.0')
