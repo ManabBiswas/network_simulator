@@ -1,292 +1,231 @@
-import { useState, useCallback, useRef } from 'react'
-import { motion } from 'framer-motion'
-import ProtocolSelector from './components/ProtocolSelector'
-import SimulationControls from './components/SimulationControls'
+import { useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import ModeSelector from './components/ModeSelector'
+import Sidebar from './components/Sidebar'
+import PanelCard from './components/PanelCard'
 import NetworkVisualization from './components/NetworkVisualization'
-import MessageInput from './components/MessageInput'
+import LadderDiagram from './components/LadderDiagram'
+import MetricCards from './components/MetricCards'
+import { ThroughputChart } from './components/ThroughputChart'
 import EventTimeline from './components/EventTimeline'
-import Statistics from './components/Statistics'
-import EdgeCaseOptions from './components/EdgeCaseOptions'
-import './App.css'
+import ComparisonPanel from './components/ComparisonPanel'
+import LoadingOverlay from './components/LoadingOverlay'
+import { useSimulation } from './hooks/useSimulation'
+import { useComparison } from './hooks/useComparison'
+import type { AppMode, Protocol, SimulationParams } from './types'
+import './index.css'
 
-interface Statistic {
-  packetsSent: number
-  acksReceived: number
-  retransmissions: number
-  totalTime: number
-  efficiency: number | string
+const DEFAULT_PARAMS: SimulationParams = {
+  totalPackets: 8,
+  transmissionDelay: 500,
+  ackDelay: 300,
+  lossRate: 0.1,
+  timeoutDuration: 1500,
+  windowSize: 4,
+  message: 'Hello from Sender!',
+  simulateCorruption: false,
+  simulateLateAck: false,
+  simulateDuplicateAck: false,
 }
 
-interface Parameters {
-  totalPackets: number
-  transmissionDelay: number
-  ackDelay: number
-  lossRate: number
-  timeoutDuration: number
-  windowSize: number
-  showEdgeCases: boolean
-  simulatePacketCorruption: boolean
-  simulateLateACK: boolean
-  simulateDuplicateACK: boolean
-}
+export default function App() {
+  const [mode, setMode] = useState<AppMode>('simulation')
+  const [protocol, setProtocol] = useState<Protocol>('stop-and-wait')
+  const [params, setParams] = useState<SimulationParams>(DEFAULT_PARAMS)
 
-interface SimulationEvent {
-  time: number
-  event_type: string
-  packet_num?: number
-  description: string
-}
+  const sim = useSimulation()
+  const cmp = useComparison()
 
-interface SimulationData {
-  events: SimulationEvent[]
-  statistics: {
-    total_packets: number
-    total_packets_sent: number
-    acks_received: number
-    retransmissions: number
-    total_time: number
-  }
-}
-
-function App() {
-  const [protocol, setProtocol] = useState<'stop-and-wait' | 'go-back-n'>('stop-and-wait')
-  const [isRunning, setIsRunning] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
-  const [message, setMessage] = useState('Hello from Sender!')
-  const [packets, setPackets] = useState<SimulationEvent[]>([])
-  const [events, setEvents] = useState<SimulationEvent[]>([])
-  const [statistics, setStatistics] = useState<Statistic>({
-    packetsSent: 0,
-    acksReceived: 0,
-    retransmissions: 0,
-    totalTime: 0,
-    efficiency: 0
-  })
-  
-  // FIX 1: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout for browser compatibility
-  const activeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isPausedRef = useRef(false)
-  
-  const [parameters, setParameters] = useState<Parameters>({
-    totalPackets: 5,
-    transmissionDelay: 500,
-    ackDelay: 300,
-    lossRate: 0.1,
-    timeoutDuration: 1500,
-    windowSize: 3,
-    showEdgeCases: true,
-    simulatePacketCorruption: false,
-    simulateLateACK: false,
-    simulateDuplicateACK: false
-  })
-
-  // FIX 2: Move playSimulation ABOVE handleStartSimulation so it is declared before use
-  const playSimulation = useCallback((data: SimulationData) => {
-    const fetchedEvents = data.events
-    let eventIndex = 0
-
-    const playNextEvent = async () => {
-      // Check if we hit the end of the simulation
-      if (eventIndex >= fetchedEvents.length) {
-        setIsRunning(false)
-        if (data.statistics) {
-          setStatistics({
-            packetsSent: data.statistics.total_packets_sent,
-            acksReceived: data.statistics.acks_received,
-            retransmissions: data.statistics.retransmissions,
-            totalTime: data.statistics.total_time,
-            efficiency: ((data.statistics.total_packets / data.statistics.total_packets_sent) * 100).toFixed(2)
-          })
-        }
-        return
-      }
-
-      // If paused, just re-poll in 100ms without incrementing the index
-      if (isPausedRef.current) {
-        activeTimeoutRef.current = setTimeout(playNextEvent, 100)
-        return
-      }
-
-      const currentEvent = fetchedEvents[eventIndex]
-
-      setEvents(prev => [...prev, currentEvent])
-      setPackets(prev => [...prev, currentEvent])
-
-      // Calculate delay until the next event
-      let delay = 50
-      if (eventIndex < fetchedEvents.length - 1) {
-        const nextTime = fetchedEvents[eventIndex + 1].time || 0
-        const currentTime = currentEvent.time || 0
-        // Cap the delay visually so the user isn't staring at nothing during a long timeout
-        delay = Math.max(Math.min(nextTime - currentTime, 400), 50)
-      }
-
-      eventIndex++
-      
-      // Schedule the next event
-      activeTimeoutRef.current = setTimeout(playNextEvent, delay)
-    }
-
-    // Kick off the playback loop
-    playNextEvent()
-  }, [])
-
-  const handleStartSimulation = useCallback(async () => {
-    // Clear any existing timeouts before starting a new run
-    if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current)
-    
-    setIsRunning(true)
-    setIsPaused(false)
-    isPausedRef.current = false
-    setEvents([])
-    setPackets([])
-
-    const params = {
-      protocol,
-      total_packets: parameters.totalPackets,
-      transmission_delay: parameters.transmissionDelay,
-      ack_delay: parameters.ackDelay,
-      loss_rate: parameters.lossRate,
-      timeout_duration: parameters.timeoutDuration,
-      window_size: protocol === 'go-back-n' ? parameters.windowSize : 1,
-      message: message,
-      simulate_edge_cases: parameters.showEdgeCases,
-      simulate_corruption: parameters.simulatePacketCorruption,
-      simulate_late_ack: parameters.simulateLateACK,
-      simulate_duplicate_ack: parameters.simulateDuplicateACK
-    }
-
-    try {
-      const response = await fetch('http://localhost:5000/api/simulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params)
-      })
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`)
-      }
-
-      const data: SimulationData = await response.json()
-      playSimulation(data)
-    } catch (error) {
-      console.error('Error fetching simulation:', error)
-      alert('Could not connect to backend. Make sure the server is running on port 5000.')
-      setIsRunning(false)
-    }
-  }, [protocol, parameters, message, playSimulation])
-
-  const handlePauseResume = () => {
-    const nextPauseState = !isPaused
-    setIsPaused(nextPauseState)
-    isPausedRef.current = nextPauseState // Sync ref for the timeout closure to read
+  const handleModeChange = (m: AppMode) => {
+    setMode(m)
+    sim.reset()
+    cmp.reset()
   }
 
-  const handleReset = () => {
-    // Kill the engine
-    if (activeTimeoutRef.current) clearTimeout(activeTimeoutRef.current)
-    
-    setIsRunning(false)
-    setIsPaused(false)
-    isPausedRef.current = false
-    setPackets([])
-    setEvents([])
-    setStatistics({
-      packetsSent: 0,
-      acksReceived: 0,
-      retransmissions: 0,
-      totalTime: 0,
-      efficiency: 0
-    })
-  }
+  const handleStart = () => sim.run(protocol, params)
+  const handleCompare = () => cmp.run(params)
+
+  const isSimMode = mode === 'simulation'
 
   return (
-    <div className="app-container">
-      <motion.header
-        className="app-header"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-      >
-        <h1>🌐 Network Protocol Simulator</h1>
-        <p>Real-time visualization of Stop-and-Wait and Go-Back-N protocols with custom messaging</p>
-      </motion.header>
+    <div style={{ minHeight: '100vh', background: '#ffffff' }}>
 
-      <main className="app-main">
-        <div className="controls-section">
-          <ProtocolSelector 
-            protocol={protocol} 
-            onProtocolChange={setProtocol}
-            disabled={isRunning}
-          />
-          
-          <MessageInput 
-            message={message}
-            onMessageChange={setMessage}
-            disabled={isRunning}
-          />
-
-          <SimulationControls
-            parameters={parameters}
-            onParametersChange={setParameters}
-            disabled={isRunning}
-            protocol={protocol}
-          />
-
-          <EdgeCaseOptions
-            parameters={parameters}
-            onParametersChange={setParameters}
-            disabled={isRunning}
-          />
-
-          <div className="button-group">
-            <motion.button
-              className="btn btn-primary"
-              onClick={handleStartSimulation}
-              disabled={isRunning}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-            >
-              {isRunning ? 'Running...' : 'Start Simulation'}
-            </motion.button>
-            
-            <motion.button
-              className="btn btn-secondary"
-              onClick={handlePauseResume}
-              disabled={!isRunning}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-            >
-              {isPaused ? 'Resume' : 'Pause'}
-            </motion.button>
-            
-            <motion.button
-              className="btn btn-danger"
-              onClick={handleReset}
-              disabled={!isRunning && events.length === 0}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-            >
-              Reset
-            </motion.button>
-          </div>
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <header style={{
+        height: 56, background: '#ffffff',
+        borderBottom: '1px solid #e2e8f0',
+        display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 28px', position: 'sticky', top: 0, zIndex: 100
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Network icon */}
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="5"  r="2.5" stroke="#2563eb" strokeWidth="1.8"/>
+            <circle cx="5"  cy="19" r="2.5" stroke="#2563eb" strokeWidth="1.8"/>
+            <circle cx="19" cy="19" r="2.5" stroke="#2563eb" strokeWidth="1.8"/>
+            <line x1="12" y1="7.5"  x2="5"  y2="16.5" stroke="#2563eb" strokeWidth="1.5"/>
+            <line x1="12" y1="7.5"  x2="19" y2="16.5" stroke="#2563eb" strokeWidth="1.5"/>
+            <line x1="7.5" y1="19" x2="16.5" y2="19" stroke="#2563eb" strokeWidth="1.5"/>
+          </svg>
+          <span style={{
+            fontFamily: 'Inter, sans-serif', fontWeight: 700,
+            fontSize: 18, color: '#0f172a', letterSpacing: '-0.01em'
+          }}>
+            Network Protocol Simulator
+            <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 14, marginLeft: 6 }}>
+              v2.1
+            </span>
+          </span>
         </div>
+        <ModeSelector mode={mode} onChange={handleModeChange} />
+      </header>
 
-        <div className="visualization-section">
-          <NetworkVisualization 
-            packets={packets}
-            protocol={protocol}
-            message={message}
-            events={events}
-          />
-          
-          <Statistics statistics={statistics} />
-        </div>
+      {/* ── Page wrapper ───────────────────────────────────────────── */}
+      <div style={{
+        maxWidth: 1440, margin: '0 auto',
+        padding: '24px 28px 48px',
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr',
+        gap: 24, alignItems: 'start'
+      }}>
 
-        <EventTimeline events={events} />
-      </main>
+        {/* ── Sidebar ──────────────────────────────────────────────── */}
+        <Sidebar
+          mode={mode}
+          protocol={protocol}
+          params={params}
+          onProtocol={setProtocol}
+          onParams={setParams}
+          isRunning={sim.isRunning}
+          isPaused={sim.isPaused}
+          onStart={handleStart}
+          onPause={sim.pause}
+          onResume={sim.resume}
+          onReset={sim.reset}
+          onCompare={handleCompare}
+          isLoading={sim.isLoading || cmp.isLoading}
+        />
+
+        {/* ── Main content ─────────────────────────────────────────── */}
+        <main style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
+
+          {/* Error banner */}
+          <AnimatePresence>
+            {(sim.error || cmp.error) && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                style={{
+                  background: '#fef2f2', border: '1px solid #fca5a5',
+                  borderRadius: 8, padding: '12px 16px',
+                  fontFamily: 'Inter, sans-serif', fontSize: 13,
+                  color: '#b91c1c', fontWeight: 500
+                }}
+              >
+                {sim.error || cmp.error}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence mode="wait">
+
+            {/* ══ SIMULATION MODE ════════════════════════════════════ */}
+            {isSimMode && (
+              <motion.div
+                key="simulation"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.25 }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
+              >
+
+                {/* Row 1: Network Viz + Ladder Diagram */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+
+                  <PanelCard title="Network Visualization" style={{ position: 'relative', minHeight: 280 }}>
+                    <AnimatePresence>
+                      {sim.isLoading && <LoadingOverlay message="Fetching simulation data..." />}
+                    </AnimatePresence>
+                    <NetworkVisualization
+                      events={sim.events}
+                      protocol={protocol}
+                      isRunning={sim.isRunning}
+                    />
+                  </PanelCard>
+
+                  <PanelCard title="Time-Space Diagram">
+                    <LadderDiagram events={sim.ladderEvents} />
+                  </PanelCard>
+                </div>
+
+                {/* Row 2: Metric cards */}
+                <MetricCards statistics={sim.statistics} />
+
+                {/* Row 3: Throughput chart + Event timeline */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+
+                  <PanelCard title="Throughput">
+                    <ThroughputChart
+                      data={sim.throughput}
+                      totalPackets={params.totalPackets}
+                    />
+                  </PanelCard>
+
+                  <PanelCard title="Event Log">
+                    <EventTimeline events={sim.events} />
+                  </PanelCard>
+                </div>
+
+              </motion.div>
+            )}
+
+            {/* ══ ANALYSIS / COMPARISON MODE ═════════════════════════ */}
+            {!isSimMode && (
+              <motion.div
+                key="analysis"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.25 }}
+                style={{ position: 'relative', minHeight: 300 }}
+              >
+                <AnimatePresence>
+                  {cmp.isLoading && <LoadingOverlay message="Running SAW and GBN comparison..." />}
+                </AnimatePresence>
+
+                {!cmp.result && !cmp.isLoading && (
+                  <div style={{
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    height: 320, gap: 14,
+                    border: '2px dashed #e2e8f0', borderRadius: 10
+                  }}>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+                      <rect x="3" y="3" width="8" height="8" rx="1.5" stroke="#94a3b8" strokeWidth="1.5"/>
+                      <rect x="13" y="3" width="8" height="8" rx="1.5" stroke="#94a3b8" strokeWidth="1.5"/>
+                      <rect x="3" y="13" width="8" height="8" rx="1.5" stroke="#94a3b8" strokeWidth="1.5"/>
+                      <rect x="13" y="13" width="8" height="8" rx="1.5" stroke="#94a3b8" strokeWidth="1.5"/>
+                    </svg>
+                    <p style={{
+                      fontFamily: 'Inter, sans-serif', fontSize: 14,
+                      color: '#94a3b8', textAlign: 'center', lineHeight: 1.6
+                    }}>
+                      Configure parameters in the sidebar and click<br />
+                      <strong style={{ color: '#475569' }}>Run Comparison</strong> to compare protocols side-by-side.
+                    </p>
+                  </div>
+                )}
+
+                {cmp.result && <ComparisonPanel result={cmp.result} />}
+              </motion.div>
+            )}
+
+          </AnimatePresence>
+        </main>
+      </div>
     </div>
   )
 }
-
-export default App

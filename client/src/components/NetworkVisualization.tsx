@@ -1,229 +1,216 @@
 import { useEffect, useState, useRef } from 'react'
-import { motion } from 'framer-motion'
-import './NetworkVisualization.css'
+import { motion, AnimatePresence } from 'framer-motion'
+import type { SimulationEvent, Protocol } from '../types'
+import { COLORS } from '../constants/theme'
 
-interface SimulationEvent {
-  time: number
-  event_type: string
-  packet_num?: number
-  description: string
-}
-
-interface NetworkVisualizationProps {
-  packets: SimulationEvent[]
-  protocol: 'stop-and-wait' | 'go-back-n'
-  message: string
+interface Props {
   events: SimulationEvent[]
+  protocol: Protocol
+  isRunning: boolean
 }
 
-interface AnimatingPacket {
+interface Bubble {
   id: string
   packetNum: number
-  direction: 'right' | 'left'
-  type: 'send' | 'ack' | 'retransmit'
-  startTime: number
+  kind: 'data' | 'ack' | 'lost' | 'retransmit'
+  laneY: number
 }
 
-const NetworkVisualization: React.FC<NetworkVisualizationProps> = ({ 
-  packets, 
-  protocol, 
-  message, 
-  events 
-}) => {
-  const [animatingPackets, setAnimatingPackets] = useState<AnimatingPacket[]>([])
-  // We use this ref to track which packets we've already animated so we don't skip any if React batches updates
-  const lastProcessedIndex = useRef<number>(-1)
+const W = 700, H = 220
+const SENDER_X = 80, RECEIVER_X = 620
+const BASE_Y = 110
+const LANE_STEP = 26
+
+const BUBBLE_COLOR: Record<string, string> = {
+  data: COLORS.blue,
+  ack: COLORS.green,
+  lost: COLORS.red,
+  retransmit: COLORS.orange,
+}
+
+export default function NetworkVisualization({ events, protocol, isRunning }: Props) {
+  const [bubbles, setBubbles] = useState<Bubble[]>([])
+  const processedRef = useRef(-1)
+  const laneCounterRef = useRef(0)
 
   useEffect(() => {
-    // If the simulation is reset, reset our index tracker
-    if (packets.length === 0) {
-      lastProcessedIndex.current = -1
-      return
+    if (events.length === 0) { 
+      processedRef.current = -1; 
+      laneCounterRef.current = 0; 
+      return 
     }
-
-    // Extract only the new packets that haven't been animated yet
-    const newPackets = packets.slice(lastProcessedIndex.current + 1)
     
-    if (newPackets.length > 0) {
-      const newAnimations: AnimatingPacket[] = []
+    const newEvents = events.slice(processedRef.current + 1)
+    if (!newEvents.length) return
 
-      newPackets.forEach(packet => {
-        if (packet.event_type === 'send' || packet.event_type === 'retransmit') {
-          newAnimations.push({
-            id: `${packet.packet_num}-${packet.event_type}-${Date.now()}-${Math.random()}`,
-            packetNum: packet.packet_num || 0,
-            direction: 'right',
-            type: packet.event_type === 'retransmit' ? 'retransmit' : 'send',
-            startTime: Date.now()
-          })
-        } else if (packet.event_type === 'ack') {
-          newAnimations.push({
-            id: `ack-${packet.packet_num}-${Date.now()}-${Math.random()}`,
-            packetNum: packet.packet_num || 0,
-            direction: 'left',
-            type: 'ack',
-            startTime: Date.now()
-          })
-        }
-      })
-
-      if (newAnimations.length > 0) {
-        // Break the synchronous render cascade by queueing the update for the next frame
-        requestAnimationFrame(() => {
-          setAnimatingPackets(prev => [...prev, ...newAnimations])
+    const newBubbles: Bubble[] = []
+    newEvents.forEach(ev => {
+      if (ev.event_type === 'send') {
+        const lane = protocol === 'go-back-n' ? (laneCounterRef.current++ % 4) : 0
+        newBubbles.push({
+          id: `send-${ev.packet_num}-${ev.time}-${Math.random()}`,
+          packetNum: ev.packet_num || 0,
+          kind: ev.description.includes('[LOST]') ? 'lost'
+            : ev.description.includes('[CORRUPTED]') ? 'lost' : 'data',
+          laneY: BASE_Y - lane * LANE_STEP,
         })
-        
-        // Clean them up after the animation finishes (0.8s animation + buffer)
-        setTimeout(() => {
-          setAnimatingPackets(prev => prev.filter(p => !newAnimations.some(na => na.id === p.id)))
-        }, 1000)
+      } else if (ev.event_type === 'ack') {
+        newBubbles.push({
+          id: `ack-${ev.packet_num}-${ev.time}-${Math.random()}`,
+          packetNum: ev.packet_num || 0,
+          kind: 'ack',
+          laneY: BASE_Y + 20,
+        })
       }
-
-      // Update the tracker so we don't process these again
-      lastProcessedIndex.current = packets.length - 1
+    })
+    
+    if (newBubbles.length) {
+      // FIX 1: Push the state update to the next frame to prevent cascading render warnings
+      requestAnimationFrame(() => {
+        setBubbles(prev => [...prev, ...newBubbles])
+      })
+      
+      setTimeout(() => {
+        setBubbles(prev => prev.filter(b => !newBubbles.some(n => n.id === b.id)))
+      }, 1100)
     }
-  }, [packets])
+    processedRef.current = events.length - 1
+  }, [events, protocol])
+
+  useEffect(() => {
+    if (!isRunning) { 
+      // FIX 2: Push the reset state update to the next frame as well
+      requestAnimationFrame(() => {
+        setBubbles([])
+      })
+      processedRef.current = -1; 
+      laneCounterRef.current = 0 
+    }
+  }, [isRunning])
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ delay: 0.35 }}
-    >
-      <h2 style={{ marginBottom: '20px', color: '#333', fontSize: '1.5em', borderBottom: '2px solid #667eea', paddingBottom: '10px' }}>
-        🔄 Network Transmission
-      </h2>
-      <div className="visualization-container">
-        <svg width="100%" height="400" viewBox="0 0 1000 400" preserveAspectRatio="xMidYMid meet">
-          <defs>
-            <marker id="arrowSend" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-              <polygon points="0 0, 10 3, 0 6" fill="#FF9800" />
-            </marker>
-            <marker id="arrowAck" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-              <polygon points="0 0, 10 3, 0 6" fill="#4CAF50" />
-            </marker>
-            <marker id="arrowRetransmit" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-              <polygon points="0 0, 10 3, 0 6" fill="#f44336" />
-            </marker>
-          </defs>
+    <div style={{ width: '100%', overflow: 'hidden' }}>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <marker id="arr-data" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <polygon points="0 0,8 3,0 6" fill={COLORS.blue} />
+          </marker>
+          <marker id="arr-ack" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <polygon points="0 0,8 3,0 6" fill={COLORS.green} />
+          </marker>
+          <marker id="arr-lost" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <polygon points="0 0,8 3,0 6" fill={COLORS.red} />
+          </marker>
+        </defs>
 
-          <line x1="80" y1="100" x2="80" y2="300" stroke="#ccc" strokeWidth="2" strokeDasharray="5,5" />
-          <line x1="920" y1="100" x2="920" y2="300" stroke="#ccc" strokeWidth="2" strokeDasharray="5,5" />
+        {/* Channel line */}
+        <line x1={SENDER_X + 52} y1={BASE_Y} x2={RECEIVER_X - 52} y2={BASE_Y}
+          stroke="#e2e8f0" strokeWidth={1.5} strokeDasharray="6 4" />
 
-          <rect x="30" y="150" width="100" height="100" fill="#4CAF50" rx="8" />
-          <text x="80" y="205" textAnchor="middle" fill="white" fontSize="16" fontWeight="600">
-            SENDER
-          </text>
+        {/* Sender node */}
+        <circle cx={SENDER_X} cy={BASE_Y} r={38} fill={COLORS.blue} />
+        {/* Computer icon path */}
+        <rect x={SENDER_X - 14} y={BASE_Y - 10} width={28} height={18} rx={2}
+          fill="none" stroke="#fff" strokeWidth={1.8} />
+        <line x1={SENDER_X - 6} y1={BASE_Y + 8} x2={SENDER_X + 6} y2={BASE_Y + 8}
+          stroke="#fff" strokeWidth={1.8} />
+        <line x1={SENDER_X} y1={BASE_Y + 8} x2={SENDER_X} y2={BASE_Y + 14}
+          stroke="#fff" strokeWidth={1.8} />
+        <line x1={SENDER_X - 8} y1={BASE_Y + 14} x2={SENDER_X + 8} y2={BASE_Y + 14}
+          stroke="#fff" strokeWidth={1.8} />
+        <text x={SENDER_X} y={BASE_Y + 54} textAnchor="middle"
+          fontFamily="Inter, sans-serif" fontWeight={600} fontSize={12} fill="#374151">
+          SENDER
+        </text>
 
-          <rect x="870" y="150" width="100" height="100" fill="#2196F3" rx="8" />
-          <text x="920" y="205" textAnchor="middle" fill="white" fontSize="16" fontWeight="600">
-            RECEIVER
-          </text>
+        {/* Receiver node */}
+        <circle cx={RECEIVER_X} cy={BASE_Y} r={38} fill={COLORS.blue} />
+        <rect x={RECEIVER_X - 14} y={BASE_Y - 10} width={28} height={18} rx={2}
+          fill="none" stroke="#fff" strokeWidth={1.8} />
+        <line x1={RECEIVER_X - 6} y1={BASE_Y + 8} x2={RECEIVER_X + 6} y2={BASE_Y + 8}
+          stroke="#fff" strokeWidth={1.8} />
+        <line x1={RECEIVER_X} y1={BASE_Y + 8} x2={RECEIVER_X} y2={BASE_Y + 14}
+          stroke="#fff" strokeWidth={1.8} />
+        <line x1={RECEIVER_X - 8} y1={BASE_Y + 14} x2={RECEIVER_X + 8} y2={BASE_Y + 14}
+          stroke="#fff" strokeWidth={1.8} />
+        <text x={RECEIVER_X} y={BASE_Y + 54} textAnchor="middle"
+          fontFamily="Inter, sans-serif" fontWeight={600} fontSize={12} fill="#374151">
+          RECEIVER
+        </text>
 
-          <text x="500" y="30" textAnchor="middle" fill="#667eea" fontSize="18" fontWeight="600">
-            {protocol === 'stop-and-wait' ? '⏸ Stop-and-Wait Protocol' : '🔄 Go-Back-N Protocol'}
-          </text>
+        {/* Protocol label */}
+        <text x={W / 2} y={18} textAnchor="middle"
+          fontFamily="Inter, sans-serif" fontWeight={600} fontSize={12} fill="#94a3b8">
+          {protocol === 'stop-and-wait' ? 'Stop-and-Wait Protocol' : 'Go-Back-N Protocol'}
+        </text>
 
-          <rect x="250" y="320" width="500" height="60" fill="#f8f9fa" stroke="#e0e0e0" strokeWidth="2" rx="4" />
-          <text x="500" y="338" textAnchor="middle" fill="#666" fontSize="12">
-            Message: {message.substring(0, 50)}{message.length > 50 ? '...' : ''}
-          </text>
-          <text x="500" y="360" textAnchor="middle" fill="#999" fontSize="11">
-            {message.length} characters
-          </text>
+        {/* Animated bubbles */}
+        <AnimatePresence>
+          {bubbles.map(b => {
+            const isAck = b.kind === 'ack'
+            const isLost = b.kind === 'lost'
+            const fromX = isAck ? RECEIVER_X - 40 : SENDER_X + 40
+            const toX = isAck ? SENDER_X + 40 : RECEIVER_X - 40
+            const midX = (fromX + toX) / 2
+            const col = BUBBLE_COLOR[b.kind]
 
-          {animatingPackets.map(packet => (
-            <motion.g key={packet.id}>
-              {packet.direction === 'right' ? (
-                <>
+            return (
+              <motion.g key={b.id}>
+                {/* Trail line */}
+                {!isLost ? (
                   <motion.line
-                    x1="130"
-                    y1="200"
-                    x2="870"
-                    y2="200"
-                    stroke={packet.type === 'retransmit' ? '#f44336' : '#FF9800'}
-                    strokeWidth="2"
-                    markerEnd={packet.type === 'retransmit' ? 'url(#arrowRetransmit)' : 'url(#arrowSend)'}
-                    strokeDasharray={packet.type === 'retransmit' ? '5,5' : '0'}
-                    initial={{ pathLength: 0 }}
-                    animate={{ pathLength: 1 }}
-                    transition={{ duration: 0.8 }}
+                    x1={fromX} y1={b.laneY} x2={toX} y2={b.laneY}
+                    stroke={col} strokeWidth={1.5}
+                    markerEnd={`url(#arr-${isAck ? 'ack' : 'data'})`}
+                    initial={{ pathLength: 0, opacity: 0.6 }}
+                    animate={{ pathLength: 1, opacity: 0 }}
+                    transition={{ duration: 0.85, ease: 'easeInOut' }}
                   />
-                  <motion.circle
-                    cx="130"
-                    cy="200"
-                    r="12"
-                    fill={packet.type === 'retransmit' ? '#f44336' : '#FF9800'}
-                    animate={{ cx: 870 }}
-                    transition={{ duration: 0.8 }}
-                  />
-                  <motion.text
-                    x="130"
-                    y="205"
-                    textAnchor="middle"
-                    fill="white"
-                    fontSize="12"
-                    fontWeight="600"
-                    animate={{ x: 870 }}
-                    transition={{ duration: 0.8 }}
-                  >
-                    P{packet.packetNum}
-                  </motion.text>
-                </>
-              ) : (
-                <>
+                ) : (
                   <motion.line
-                    x1="870"
-                    y1="240"
-                    x2="130"
-                    y2="240"
-                    stroke="#4CAF50"
-                    strokeWidth="2"
-                    markerEnd="url(#arrowAck)"
-                    initial={{ pathLength: 0 }}
-                    animate={{ pathLength: 1 }}
-                    transition={{ duration: 0.8 }}
+                    x1={fromX} y1={b.laneY} x2={midX} y2={b.laneY}
+                    stroke={col} strokeWidth={1.5} strokeDasharray="5 3"
+                    markerEnd="url(#arr-lost)"
+                    initial={{ pathLength: 0, opacity: 0.7 }}
+                    animate={{ pathLength: 1, opacity: 0 }}
+                    transition={{ duration: 0.5 }}
                   />
-                  <motion.circle
-                    cx="870"
-                    cy="240"
-                    r="12"
-                    fill="#4CAF50"
-                    animate={{ cx: 130 }}
-                    transition={{ duration: 0.8 }}
-                  />
+                )}
+                {/* Bubble */}
+                <motion.circle
+                  cx={fromX} cy={b.laneY} r={13}
+                  fill={col}
+                  animate={{ cx: isLost ? midX : toX, opacity: isLost ? [1, 0] : [1, 1, 0] }}
+                  transition={{ duration: isLost ? 0.45 : 0.85, ease: 'easeInOut' }}
+                />
+                <motion.text
+                  x={fromX} y={b.laneY + 4}
+                  textAnchor="middle"
+                  fontFamily="Inter, sans-serif" fontWeight={700} fontSize={10} fill="#fff"
+                  animate={{ x: isLost ? midX : toX, opacity: isLost ? [1, 0] : [1, 1, 0] }}
+                  transition={{ duration: isLost ? 0.45 : 0.85, ease: 'easeInOut' }}
+                >
+                  {isAck ? `A${b.packetNum}` : `P${b.packetNum}`}
+                </motion.text>
+                {/* X mark for lost */}
+                {isLost && (
                   <motion.text
-                    x="870"
-                    y="245"
+                    x={midX} y={b.laneY + 5}
                     textAnchor="middle"
-                    fill="white"
-                    fontSize="11"
-                    fontWeight="600"
-                    animate={{ x: 130 }}
-                    transition={{ duration: 0.8 }}
+                    fontFamily="Inter, sans-serif" fontWeight={700} fontSize={14}
+                    fill={COLORS.red}
+                    initial={{ opacity: 0, scale: 0 }}
+                    animate={{ opacity: [0, 1, 0], scale: [0, 1.2, 0] }}
+                    transition={{ delay: 0.4, duration: 0.6 }}
                   >
-                    ACK{packet.packetNum}
+                    X
                   </motion.text>
-                </>
-              )}
-            </motion.g>
-          ))}
-        </svg>
-      </div>
-
-      {events.length > 0 && (
-        <motion.div
-          style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f0f7ff', borderRadius: '8px', borderLeft: '4px solid #2196F3' }}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-        >
-          <p style={{ color: '#333', fontSize: '0.95em' }}>
-            <strong>Last Event:</strong> {events[events.length - 1]?.description}
-          </p>
-        </motion.div>
-      )}
-    </motion.div>
+                )}
+              </motion.g>
+            )
+          })}
+        </AnimatePresence>
+      </svg>
+    </div>
   )
 }
-
-export default NetworkVisualization
