@@ -10,6 +10,7 @@ interface SingleProps {
   totalPackets: number
 }
 
+// FIX 3: Remove typed formatter — let recharts infer. Use labelFormatter only.
 export function ThroughputChart({ data, totalPackets }: SingleProps) {
   return (
     <ResponsiveContainer width="100%" height={200}>
@@ -19,27 +20,30 @@ export function ThroughputChart({ data, totalPackets }: SingleProps) {
           dataKey="time"
           stroke="#94a3b8"
           tick={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fill: '#94a3b8' }}
-          label={{ value: 'Time (ms)', position: 'insideBottom', offset: -14,
-            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif' }}
+          label={{
+            value: 'Time (ms)', position: 'insideBottom', offset: -14,
+            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif'
+          }}
         />
         <YAxis
           stroke="#94a3b8"
           tick={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fill: '#94a3b8' }}
           allowDecimals={false}
           domain={[0, totalPackets || 'auto']}
-          label={{ value: 'Delivered', angle: -90, position: 'insideLeft',
-            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif', dx: 12 }}
+          label={{
+            value: 'Delivered', angle: -90, position: 'insideLeft',
+            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif', dx: 12
+          }}
         />
         <Tooltip
           contentStyle={{
             background: '#ffffff', border: '1px solid #e2e8f0',
             borderRadius: 6, fontSize: 12, fontFamily: 'Inter, sans-serif'
           }}
-          labelFormatter={(v: number) => `${v} ms`}
-          formatter={(v: number) => [`${v} packets`, 'Delivered']}
+          labelFormatter={(v) => `Time: ${v} ms`}
         />
         <Line
-          type="monotone" dataKey="delivered"
+          type="monotone" dataKey="delivered" name="Packets Delivered"
           stroke={COLORS.blue} strokeWidth={2}
           dot={false} isAnimationActive={false}
         />
@@ -52,8 +56,8 @@ export function ThroughputChart({ data, totalPackets }: SingleProps) {
 
 interface ComparisonPoint {
   time: number
-  saw?: number
-  gbn?: number
+  saw: number
+  gbn: number
 }
 
 interface ComparisonProps {
@@ -64,11 +68,10 @@ interface ComparisonProps {
 
 function mergeForComparison(saw: ThroughputPoint[], gbn: ThroughputPoint[]): ComparisonPoint[] {
   const timeSet = new Set([...saw.map(p => p.time), ...gbn.map(p => p.time)])
-  const times = Array.from(timeSet).sort((a, b) => a - b)
-  const sawMap = new Map(saw.map(p => [p.time, p.delivered]))
-  const gbnMap = new Map(gbn.map(p => [p.time, p.delivered]))
+  const times   = Array.from(timeSet).sort((a, b) => a - b)
+  const sawMap  = new Map(saw.map(p => [p.time, p.delivered]))
+  const gbnMap  = new Map(gbn.map(p => [p.time, p.delivered]))
 
-  // Forward-fill
   let lastSaw = 0, lastGbn = 0
   return times.map(t => {
     if (sawMap.has(t)) lastSaw = sawMap.get(t)!
@@ -88,26 +91,33 @@ export function ComparisonThroughputChart({ sawData, gbnData, totalPackets }: Co
           dataKey="time"
           stroke="#94a3b8"
           tick={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fill: '#94a3b8' }}
-          label={{ value: 'Time (ms)', position: 'insideBottom', offset: -14,
-            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif' }}
+          label={{
+            value: 'Time (ms)', position: 'insideBottom', offset: -14,
+            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif'
+          }}
         />
         <YAxis
           stroke="#94a3b8"
           tick={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fill: '#94a3b8' }}
           allowDecimals={false}
           domain={[0, totalPackets || 'auto']}
-          label={{ value: 'Delivered', angle: -90, position: 'insideLeft',
-            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif', dx: 12 }}
+          label={{
+            value: 'Delivered', angle: -90, position: 'insideLeft',
+            fill: '#64748b', fontSize: 11, fontFamily: 'Inter, sans-serif', dx: 12
+          }}
         />
         <Tooltip
           contentStyle={{
             background: '#ffffff', border: '1px solid #e2e8f0',
             borderRadius: 6, fontSize: 12, fontFamily: 'Inter, sans-serif'
           }}
-          labelFormatter={(v: number) => `${v} ms`}
+          labelFormatter={(v) => `Time: ${v} ms`}
         />
         <Legend
-          wrapperStyle={{ fontFamily: 'Inter, sans-serif', fontSize: 12, color: '#64748b', paddingTop: 8 }}
+          wrapperStyle={{
+            fontFamily: 'Inter, sans-serif', fontSize: 12,
+            color: '#64748b', paddingTop: 8
+          }}
         />
         <Line
           type="monotone" dataKey="saw" name="Stop-and-Wait"

@@ -14,27 +14,33 @@ export function useComparison() {
 
   const run = useCallback(async (params: SimulationParams) => {
     setState({ result: null, isLoading: true, error: null })
+
+    const apiBase = import.meta.env.VITE_API_URL ?? ''
+
     try {
-const res = await fetch('http://localhost:5000/api/simulate', {        method: 'POST',
+      const res = await fetch(`${apiBase}/api/compare`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          total_packets: params.totalPackets,
-          transmission_delay: params.transmissionDelay,
-          ack_delay: params.ackDelay,
-          loss_rate: params.lossRate,
-          timeout_duration: params.timeoutDuration,
-          window_size: params.windowSize,
-          message: params.message,
-          simulate_corruption: params.simulateCorruption,
-          simulate_late_ack: params.simulateLateAck,
+          total_packets:          params.totalPackets,
+          transmission_delay:     params.transmissionDelay,
+          ack_delay:              params.ackDelay,
+          loss_rate:              params.lossRate,
+          timeout_duration:       params.timeoutDuration,
+          window_size:            params.windowSize,
+          message:                params.message,
+          simulate_corruption:    params.simulateCorruption,
+          simulate_late_ack:      params.simulateLateAck,
           simulate_duplicate_ack: params.simulateDuplicateAck,
-        })
+        }),
       })
       if (!res.ok) throw new Error((await res.json()).error || res.statusText)
       const data: ComparisonResult = await res.json()
       setState({ result: data, isLoading: false, error: null })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Connection failed — is the backend running?'
+      const msg = e instanceof Error
+        ? e.message
+        : 'Connection failed — is the backend running?'
       setState({ result: null, isLoading: false, error: msg })
     }
   }, [])

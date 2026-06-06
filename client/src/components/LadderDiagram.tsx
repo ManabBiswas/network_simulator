@@ -69,7 +69,7 @@ function LadderArrow({ ev, y, index }: ArrowProps) {
   const midY = (y1 + y2) / 2 - 7
 
   // Arrow marker id
-  const markerId = `arr-ladder-${color.replace('#', '')}`
+  // const markerId = `arr-ladder-${color.replace('#', '')}`
 
   return (
     <motion.g

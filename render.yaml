@@ -1,0 +1,15 @@
+# Render.com deployment — one service: Flask serves built React frontend
+# Deploy: connect your GitHub repo, Render auto-detects this file.
+
+services:
+  - type: web
+    name: network-protocol-simulator
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: FLASK_DEBUG
+        value: false
+      - key: CORS_ORIGINS
+        value: "*"
+    healthCheckPath: /api/health
